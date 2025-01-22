@@ -37,6 +37,7 @@ apps = [
         'test-regex',
         'test-sad',
         'test-security-perf',
+	    'firewall',
 ]
 
 if get_option('tests')
@@ -59,6 +60,14 @@ foreach app:apps
     includes = []
     cflags = default_cflags
     ldflags = default_ldflags
+
+    if name == 'firewall'
+        lds_script = meson.current_source_dir() + '/module_section.lds' 
+        ldflags += ['-T', lds_script]
+        ldflags += ['-ljson-c']
+        ldflags += ['-lcli']
+    endif
+
     objs = [] # other object files to link against, used e.g. for
               # instruction-set optimized versions of code
 
