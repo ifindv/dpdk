@@ -18,6 +18,7 @@ typedef enum {
   MOD_ID_INTERFACE,
   MOD_ID_DECODER,
   MOD_ID_ACL,
+  MOD_ID_MAX,
 } mod_id_t;
 
 typedef enum {
@@ -61,23 +62,16 @@ typedef struct {
 #pragma pack()
 
 #define MAX_MODULE_NUM 128
-extern int max_module_id;
 extern module_t *modules[MAX_MODULE_NUM];
 
 #define MODULE_DECLARE(m) module_t m __module__
 
-#define MODULE_REGISTER(m)                                                     \
-  do {                                                                         \
-    if (((m)->id > 0) && ((m)->id < 128) && (!modules[(m)->id])) {             \
-      modules[(m)->id] = m;                                                    \
-      if ((m)->id > max_module_id) {                                           \
-        max_module_id = (m)->id;                                               \
-      }                                                                        \
-    }                                                                          \
+#define MODULE_REGISTER(m)                                                            \
+  do {                                                                                \
+    if (((m)->id > MOD_ID_NONE) && ((m)->id < MOD_ID_MAX) && (!modules[(m)->id])) {   \
+      modules[(m)->id] = m;                                                           \
+    }                                                                                 \
   } while (0)
-
-#define MODULE_FOREACH(m, id)                                                  \
-  for (id = 0, m = modules[id]; id <= max_module_id; m = modules[++id])
 
 int modules_load(void);
 int modules_init(void *config);

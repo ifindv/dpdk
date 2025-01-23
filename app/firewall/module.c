@@ -5,12 +5,85 @@ module_t __module_start__;
 module_t __module_end__;
 
 module_t *modules[MAX_MODULE_NUM] = {0};
-int max_module_id = -1;
+
+// order of modules in each hook
+mod_id_t hook_recv[] = {
+  MOD_ID_INTERFACE
+};
+
+mod_id_t hook_ingress[] = {
+  MOD_ID_DECODER, 
+  MOD_ID_ACL
+};
+
+mod_id_t hook_prerouting[] = {
+  MOD_ID_INTERFACE
+};
+
+mod_id_t hook_forward[] = {
+  MOD_ID_NONE
+};
+
+mod_id_t hook_postrouting[] = {
+  MOD_ID_NONE
+};
+
+mod_id_t hook_localin[] = {
+  MOD_ID_NONE
+};
+
+mod_id_t hook_localout[] = {
+  MOD_ID_NONE
+};
+
+mod_id_t hook_egress[] = {
+  MOD_ID_DECODER, 
+  MOD_ID_ACL
+};
+
+mod_id_t hook_send[] = {
+  MOD_ID_INTERFACE
+};
+
+mod_id_t *hooks[] = {
+  hook_recv,
+  hook_ingress,
+  hook_prerouting,
+  hook_forward,
+  hook_postrouting,
+  hook_localin,
+  hook_localout,
+  hook_egress,
+  hook_send
+};
+
+#define mod_id_size sizeof(mod_id_t)
+
+int hook_size[] = {
+  sizeof(hook_recv) / mod_id_size,
+  sizeof(hook_ingress) / mod_id_size,
+  sizeof(hook_prerouting) / mod_id_size,
+  sizeof(hook_forward) / mod_id_size,
+  sizeof(hook_postrouting) / mod_id_size,
+  sizeof(hook_localin) / mod_id_size,
+  sizeof(hook_localout) / mod_id_size,
+  sizeof(hook_egress) / mod_id_size,
+  sizeof(hook_send) / mod_id_size
+};
+
+// iterate through all modules
+#define MODULE_FOREACH(m, id) \
+  for (id = MOD_ID_NONE, m = modules[id]; id < MOD_ID_MAX; id++, m = modules[id])
+
+// iterate through modules in a specific hook
+#define MODULE_FOREACH_HOOK(m, id, hook) \
+  for (id = 0, m = modules[hooks[hook][id]]; id < hook_size[hook]; id++, m = modules[hooks[hook][id]])
 
 int modules_load(void) {
   module_t *m;
 
   for (m = &__module_start__; m < &__module_end__; m++) {
+    printf("== module load %s \n", m->name);
     MODULE_REGISTER(m);
   }
 
@@ -23,6 +96,7 @@ int modules_init(void *config) {
 
   MODULE_FOREACH(m, id) {
     if (m && m->init && m->enabled) {
+      printf("== module init %s\n", m->name);
       if (m->init(config)) {
         return -1;
       }
@@ -38,6 +112,7 @@ int modules_conf(void *config) {
 
   MODULE_FOREACH(m, id) {
     if (m && m->conf && m->enabled) {
+      printf("== module conf %s\n", m->name);
       if (m->conf(config)) {
         return -1;
       }
@@ -53,6 +128,7 @@ int modules_free(void *config) {
 
   MODULE_FOREACH(m, id) {
     if (m && m->free && m->enabled) {
+      printf("== module free %s\n", m->name);
       if (m->free(config)) {
         return -1;
       }
@@ -66,7 +142,7 @@ int modules_proc(void *config, struct rte_mbuf *pkt, mod_hook_t hook) {
   module_t *m;
   int id;
 
-  MODULE_FOREACH(m, id) {
+  MODULE_FOREACH_HOOK(m, id, hook) {
     mod_ret_t ret;
 
     if (m && m->proc && m->enabled) {
