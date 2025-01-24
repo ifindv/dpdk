@@ -10,15 +10,17 @@
 
 #include "interface.h"
 
-MODULE_DECLARE(interface) = {.name = "interface",
-                             .id = MOD_ID_INTERFACE,
-                             .enabled = true,
-                             .log = true,
-                             .init = interface_init,
-                             .proc = interface_proc,
-                             .conf = NULL,
-                             .free = NULL,
-                             .priv = NULL};
+MODULE_DECLARE(interface) = {
+  .name = "interface",
+  .id = MOD_ID_INTERFACE,
+  .enabled = true,
+  .log = true,
+  .init = interface_init,
+  .proc = interface_proc,
+  .conf = NULL,
+  .free = NULL,
+  .priv = NULL
+};
 
 static int interface_type_str2int(const char *str) {
   if (!strcmp("vwire", str))
@@ -98,7 +100,7 @@ static uint16_t interface_vwire_pair(interface_config_t *itfc,
   return port_in;
 }
 
-static int interface_json_load(config_t *config) {
+static int interface_load(config_t *config) {
   interface_config_t *itfc = config->itf_cfg;
   json_object *jr = NULL, *ja;
   int i, itf_num;
@@ -171,33 +173,19 @@ done:
   return ret;
 }
 
-int interface_init(void *config) {
-  config_t *c = config;
-  struct rte_eth_conf port_conf;
+static int interface_setup(config_t *config) {
   struct rte_eth_dev_info dev_info;
-  uint16_t port_id, i;
-  uint16_t nb_rx_desc = 1024;
-  uint16_t nb_tx_desc = 1024;
-  int ret;
+  struct rte_eth_conf port_conf;
+  uint16_t port_id;
+  int i, ret;
 
-  memset(&port_conf, 0, sizeof(struct rte_eth_conf));
-  // port_conf.rxmode.split_hdr_size = 0;
+  config_t *c = config;
+
+  memset(&port_conf, 0, sizeof(struct rte_eth_conf));  
   port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
   port_conf.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
 
-  c->itf_cfg = malloc(sizeof(interface_config_t));
-  if (!c->itf_cfg) {
-    printf("alloc interface config failed\n");
-    return -1;
-  }
-
-  memset(c->itf_cfg, 0, sizeof(interface_config_t));
-
-  ret = interface_json_load(c);
-  if (ret) {
-    printf("interface json load failed\n");
-    return -1;
-  }
+  c->queue_num = 0;
 
   RTE_ETH_FOREACH_DEV(port_id) {
     ret = rte_eth_dev_info_get(port_id, &dev_info);
@@ -206,56 +194,64 @@ int interface_init(void *config) {
       return -1;
     }
 
-    c->rxq_num = (dev_info.max_rx_queues > c->worker_num)
-                     ? c->worker_num
-                     : dev_info.max_rx_queues;
+    if ((c->txq_num > dev_info.max_tx_queues)
+    || (c->txq_num > dev_info.max_rx_queues)) {
+      printf("worker tx queue num out of range\n");
+      return -1;
+    }
+    c->queue_num = c->txq_num;
 
-    c->txq_num = (dev_info.max_tx_queues > c->worker_num)
-                     ? c->worker_num
-                     : dev_info.max_tx_queues;
-
-    ret = rte_eth_dev_configure(port_id, c->rxq_num, c->txq_num, &port_conf);
+    ret = rte_eth_dev_configure(port_id, c->queue_num, c->queue_num, &port_conf);
     if (ret < 0) {
       printf("rte eth dev configure failed\n");
       return -1;
     }
 
-    for (i = 0; i < c->rxq_num; i++) {
-      ret = rte_eth_rx_queue_setup(port_id, i, nb_rx_desc,
-                                   rte_eth_dev_socket_id(port_id),
-                                   &dev_info.default_rxconf, c->pktmbuf_pool);
+    for (i = 0; i < c->queue_num; i++) {
+      ret = rte_eth_rx_queue_setup(
+        port_id, 
+        i, 
+        DEF_RX_DESC_NUM, 
+        rte_eth_dev_socket_id(port_id),
+        &dev_info.default_rxconf, 
+        c->pktmbuf_pool
+      );
       if (ret < 0) {
-        printf("rte eth rx queue setup failed\n");
+        printf("rx queue setup failed\n");
         return -1;
       }
     }
 
-    for (i = 0; i < c->txq_num; i++) {
-      ret = rte_eth_tx_queue_setup(port_id, i, nb_tx_desc,
-                                   rte_eth_dev_socket_id(port_id),
-                                   &dev_info.default_txconf);
+    for (i = 0; i < c->queue_num; i++) {
+      ret = rte_eth_tx_queue_setup(
+        port_id, 
+        i, 
+        DEF_TX_DESC_NUM,
+        rte_eth_dev_socket_id(port_id),
+        &dev_info.default_txconf
+      );
       if (ret < 0) {
-        printf("rte eth tx queue setup failed\n");
+        printf("tx queue setup failed\n");
         return -1;
       }
     }
 
     ret = rte_eth_dev_set_ptypes(port_id, RTE_PTYPE_UNKNOWN, NULL, 0);
     if (ret < 0) {
-      printf("rte eth dev set ptypes failed\n");
+      printf("setup ptypes failed\n");
       return -1;
     }
 
     ret = rte_eth_dev_start(port_id);
     if (ret < 0) {
-      printf("rte eth dev start failed\n");
+      printf("port startup failed\n");
       return -1;
     }
 
     if (c->promiscuous) {
       ret = rte_eth_promiscuous_enable(port_id);
       if (ret != 0) {
-        printf("rte eth promiscuous enable failed\n");
+        printf("promiscuous enable failed\n");
         return -1;
       }
     }
@@ -264,30 +260,45 @@ int interface_init(void *config) {
   return 0;
 }
 
-static int interface_proc_recv(config_t *config) {
-  struct rte_mbuf *pkts_burst[MAX_PKT_BURST] = {0};
-  packet_t *p;
-  int i, nb_rx, port_id, queue_id;
+int interface_init(void *config) {
+  config_t *c = config;
+  int ret = -1;
 
-  RTE_ETH_FOREACH_DEV(port_id) {
-    for (queue_id = 0; queue_id < config->rxq_num; queue_id++) {
-      nb_rx = rte_eth_rx_burst(port_id, queue_id, pkts_burst, MAX_PKT_BURST);
-      if (nb_rx) {
-        for (i = 0; i < nb_rx; i++) {
-          p = rte_mbuf_to_priv(pkts_burst[i]);
-          if (p) {
-            p->port_in = port_id;
-          }
-        }
-
-        while (!rte_ring_enqueue_bulk(config->rx_queues[queue_id],
-                                      (void *const *)pkts_burst, nb_rx, NULL))
-          ;
-      }
-    }
+  if (c->itf_cfg) {
+    printf("interface config exist\n");
+    return ret;
   }
 
-  return 0;
+  c->itf_cfg = malloc(sizeof(interface_config_t));
+  if (!c->itf_cfg) {
+    printf("alloc interface config failed\n");
+    goto done;
+  }
+
+  memset(c->itf_cfg, 0, sizeof(interface_config_t));
+
+  ret = interface_load(c);
+  if (ret) {
+    printf("interface load config failed\n");
+    goto done;
+  }
+
+  ret = interface_setup(c);
+  if (ret) {
+    printf("interface setup failed\n");
+    goto done;
+  }
+
+  ret = 0;
+
+done:
+  if (ret) {
+    if (c->itf_cfg) {
+      free(c->itf_cfg);
+      c->itf_cfg = NULL;
+    }
+  }
+  return ret;
 }
 
 static int interface_proc_prerouting(config_t *config, struct rte_mbuf *mbuf) {
@@ -312,39 +323,9 @@ static int interface_proc_prerouting(config_t *config, struct rte_mbuf *mbuf) {
   return 0;
 }
 
-static int interface_proc_send(config_t *config) {
-  struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
-  int nb_tx, tx, port_id, queue_id;
-
-  for (port_id = 0; port_id < config->port_num; port_id++) {
-    for (queue_id = 0; queue_id < config->txq_num; queue_id++) {
-      nb_tx = rte_ring_count(config->tx_queues[port_id][queue_id]);
-      if (!nb_tx) {
-        continue;
-      }
-
-      nb_tx = nb_tx > MAX_PKT_BURST ? MAX_PKT_BURST : nb_tx;
-      nb_tx = rte_ring_dequeue_bulk(config->tx_queues[port_id][queue_id],
-                                    (void **)pkts_burst, nb_tx, NULL);
-      if (nb_tx) {
-        tx = rte_eth_tx_burst(port_id, queue_id, pkts_burst, nb_tx);
-        if (tx < nb_tx) {
-          ;
-        }
-      }
-    }
-  }
-
-  return 0;
-}
-
 mod_ret_t interface_proc(void *config, struct rte_mbuf *mbuf, mod_hook_t hook) {
-  if (hook == MOD_HOOK_RECV)
-    interface_proc_recv(config);
   if (hook == MOD_HOOK_PREROUTING)
     interface_proc_prerouting(config, mbuf);
-  if (hook == MOD_HOOK_SEND)
-    interface_proc_send(config);
   return MOD_RET_ACCEPT;
 }
 

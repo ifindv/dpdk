@@ -5,6 +5,10 @@
 
 #define MAX_PORT_NUM 32
 
+// default rx and tx descriptor number
+#define DEF_RX_DESC_NUM 512
+#define DEF_TX_DESC_NUM 512
+
 typedef enum {
   PORT_TYPE_NONE,
   PORT_TYPE_VWIRE,

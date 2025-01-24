@@ -16,10 +16,10 @@
 #include "worker.h"
 
 extern config_t config_a, config_b;
-extern int config_index_for_worker[MAX_WORKER_NUM], config_index_for_mgmt;
+extern int _config_index[MAX_WORKER_NUM], config_index;
 
-config_t *config_for_mgmt = &config_a;
-__thread config_t *config_for_worker;
+config_t *config = &config_a;
+__thread config_t *_config;
 
 volatile bool force_quit;
 
@@ -37,21 +37,17 @@ static int cli_show_conf(struct cli_def *cli, const char *command, char *argv[],
   config_t *c = cli_get_context(cli);
   CLI_PRINT(cli, "working copy config-%s", (c == &config_a) ? "A" : "B");
   CLI_PRINT(cli, "indicator [%d %d %d %d %d %d %d %d] %d",
-            config_index_for_worker[0], config_index_for_worker[1],
-            config_index_for_worker[2], config_index_for_worker[3],
-            config_index_for_worker[4], config_index_for_worker[5],
-            config_index_for_worker[6], config_index_for_worker[7],
-            config_index_for_mgmt);
+            _config_index[0], _config_index[1],
+            _config_index[2], _config_index[3],
+            _config_index[4], _config_index[5],
+            _config_index[6], _config_index[7],
+            config_index);
 
   CLI_PRINT(cli, "pktmbuf pool %p", c->pktmbuf_pool);
   CLI_PRINT(cli, "promiscuous %d", c->promiscuous);
   CLI_PRINT(cli, "worker num %d", c->worker_num);
   CLI_PRINT(cli, "port num %d", c->port_num);
-  CLI_PRINT(cli, "mangement core id %d", c->mgt_core);
-  CLI_PRINT(cli, "rx core id %d", c->rx_core);
-  CLI_PRINT(cli, "tx core id %d", c->tx_core);
-  CLI_PRINT(cli, "rtx core id %d", c->rtx_core);
-  CLI_PRINT(cli, "rtx worker core id %d", c->rtx_worker_core);
+  CLI_PRINT(cli, "queue num %d", c->queue_num);
   CLI_PRINT(cli, "cli def %p", c->cli_def);
   CLI_PRINT(cli, "cli show %p", c->cli_show);
   CLI_PRINT(cli, "cli socket id %d", c->cli_sockfd);
@@ -68,24 +64,29 @@ static int cli_show_conf(struct cli_def *cli, const char *command, char *argv[],
 
 static int main_loop(__rte_unused void *arg) {
   int lcore_id = rte_lcore_id();
-  config_for_worker = (config_t *)arg;
-  config_index_for_worker[lcore_id] = 0;
+  worker_t *worker = (worker_t *)config->workers + config->worker_map[lcore_id];
+  role_t role = worker->role;
+
+  printf("lcore %d start, role %d\n", lcore_id, role);
+
+  _config = (config_t *)arg;
+  _config_index[lcore_id] = 0;
 
   while (!force_quit) {
-    if (config_for_worker->switch_mark) {
-      config_for_worker = config_switch(config_for_worker, lcore_id);
+    if (_config->switch_mark) {
+      _config = config_switch(_config, lcore_id);
     }
 
-    if (lcore_id == config_for_worker->rx_core)
-      RX(config_for_worker);
-    else if (lcore_id == config_for_worker->tx_core)
-      TX(config_for_worker);
-    else if (lcore_id == config_for_worker->rtx_core)
-      RTX(config_for_worker);
-    else if (lcore_id == config_for_worker->rtx_worker_core)
-      RTX_WORKER(config_for_worker);
-    else
-      WORKER(config_for_worker);
+    if (role == ROLE_RX)
+      RX(_config);
+    else if (role == ROLE_TX)
+      TX(_config);
+    else if (role == ROLE_RTX)
+      RTX(_config);
+    else if (role == ROLE_RTX_WORKER)
+      RTX_WORKER(_config);
+    else if (role == ROLE_WORKER)
+      WORKER(_config);
   }
 
   return 0;
@@ -107,7 +108,7 @@ static void mgmt_loop(__rte_unused config_t *c) {
         _c->switch_mark = 1;
         _c = config_switch(_c, -1);
         cli_set_context(_c->cli_def, _c);
-        config_for_mgmt = _c;
+        config = _c;
       }
     }
     _cli_run(_c);
@@ -115,7 +116,6 @@ static void mgmt_loop(__rte_unused config_t *c) {
 }
 
 int main(int argc, char **argv) {
-  int lcore_id;
   int ret = 0;
 
   ret = rte_eal_init(argc, argv);
@@ -129,87 +129,45 @@ int main(int argc, char **argv) {
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
-  config_for_mgmt->pktmbuf_pool = rte_pktmbuf_pool_create(
-      "mbuf_pool", 81920, 256, sizeof(packet_t), 128 + 2048, rte_socket_id());
-  if (!config_for_mgmt->pktmbuf_pool) {
+  config->pktmbuf_pool = rte_pktmbuf_pool_create(
+    "mbuf_pool", 
+    81920, 
+    256, 
+    sizeof(packet_t), 
+    128 + 2048, 
+    rte_socket_id()
+  );
+  if (!config->pktmbuf_pool) {
     rte_exit(EXIT_FAILURE, "create pktmbuf pool failed\n");
   }
 
-  unsigned int lcores = rte_lcore_count();
-  if (lcores < 2 || lcores > 8 || lcores % 2) {
-    rte_exit(EXIT_FAILURE,
-             "lcores must be multiple of 2, support 2,4,8 for now\n");
-  }
+  config->port_num = rte_eth_dev_count_avail();
 
-  config_for_mgmt->mgt_core = rte_get_main_lcore();
-
-  /** TODO: alloc lcore role by config file.
-   * */
-  RTE_LCORE_FOREACH(lcore_id) {
-    if (lcores == 2) {
-      if (lcore_id != config_for_mgmt->mgt_core) {
-        config_for_mgmt->rtx_worker_core = lcore_id;
-        config_for_mgmt->worker_num++;
-      }
-    }
-
-    if (lcores == 4) {
-      if (lcore_id != config_for_mgmt->mgt_core) {
-        if (config_for_mgmt->rtx_core == -1) {
-          config_for_mgmt->rtx_core = lcore_id;
-        } else {
-          config_for_mgmt->worker_num++;
-        }
-      }
-    }
-
-    if (lcores == 8) {
-      if (lcore_id != config_for_mgmt->mgt_core) {
-        if (config_for_mgmt->rx_core == -1) {
-          config_for_mgmt->rx_core = lcore_id;
-          continue;
-        }
-
-        if (config_for_mgmt->tx_core == -1) {
-          config_for_mgmt->tx_core = lcore_id;
-          continue;
-        }
-
-        config_for_mgmt->worker_num++;
-      }
-    }
-  }
-
-  config_for_mgmt->port_num = rte_eth_dev_count_avail();
-  if (config_for_mgmt->port_num < 2) {
-    rte_exit(EXIT_FAILURE, "need 2 port at least");
-  }
-
-  ret = worker_init(config_for_mgmt);
-  if (ret) {
-    rte_exit(EXIT_FAILURE, "worker init erorr\n");
-  }
-
-  ret = _cli_init(config_for_mgmt);
+  ret = _cli_init(config);
   if (ret) {
     rte_exit(EXIT_FAILURE, "cli init erorr\n");
   }
 
-  CLI_CMD_C(config_for_mgmt->cli_def, config_for_mgmt->cli_show, "config",
+  CLI_CMD_C(config->cli_def, config->cli_show, "config",
             cli_show_conf, "global configuration");
 
+  ret = worker_init(config);
+  if (ret) {
+    rte_exit(EXIT_FAILURE, "worker init erorr\n");
+  }
+
   modules_load();
-  ret = modules_init(config_for_mgmt);
+  ret = modules_init(config);
   if (ret) {
     rte_exit(EXIT_FAILURE, "module init erorr\n");
   }
 
-  rte_eal_mp_remote_launch(main_loop, (void *)config_for_mgmt, SKIP_MAIN);
-  mgmt_loop(config_for_mgmt);
+  rte_eal_mp_remote_launch(main_loop, (void *)config, SKIP_MAIN);
+  mgmt_loop(config);
 
   ret = 0;
   rte_eal_mp_wait_lcore();
-  modules_free(config_for_mgmt);
+  modules_free(config);
   rte_eal_cleanup();
 
   return ret;

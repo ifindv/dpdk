@@ -6,11 +6,6 @@ module_t __module_end__;
 
 module_t *modules[MAX_MODULE_NUM] = {0};
 
-// order of modules in each hook
-mod_id_t hook_recv[] = {
-  MOD_ID_INTERFACE
-};
-
 mod_id_t hook_ingress[] = {
   MOD_ID_DECODER, 
   MOD_ID_ACL
@@ -41,12 +36,7 @@ mod_id_t hook_egress[] = {
   MOD_ID_ACL
 };
 
-mod_id_t hook_send[] = {
-  MOD_ID_INTERFACE
-};
-
 mod_id_t *hooks[] = {
-  hook_recv,
   hook_ingress,
   hook_prerouting,
   hook_forward,
@@ -54,28 +44,21 @@ mod_id_t *hooks[] = {
   hook_localin,
   hook_localout,
   hook_egress,
-  hook_send
 };
-
-#define mod_id_size sizeof(mod_id_t)
 
 int hook_size[] = {
-  sizeof(hook_recv) / mod_id_size,
-  sizeof(hook_ingress) / mod_id_size,
-  sizeof(hook_prerouting) / mod_id_size,
-  sizeof(hook_forward) / mod_id_size,
-  sizeof(hook_postrouting) / mod_id_size,
-  sizeof(hook_localin) / mod_id_size,
-  sizeof(hook_localout) / mod_id_size,
-  sizeof(hook_egress) / mod_id_size,
-  sizeof(hook_send) / mod_id_size
+  sizeof(hook_ingress) / sizeof(mod_id_t),
+  sizeof(hook_prerouting) / sizeof(mod_id_t),
+  sizeof(hook_forward) / sizeof(mod_id_t),
+  sizeof(hook_postrouting) / sizeof(mod_id_t),
+  sizeof(hook_localin) / sizeof(mod_id_t),
+  sizeof(hook_localout) / sizeof(mod_id_t),
+  sizeof(hook_egress) / sizeof(mod_id_t)
 };
 
-// iterate through all modules
 #define MODULE_FOREACH(m, id) \
   for (id = MOD_ID_NONE, m = modules[id]; id < MOD_ID_MAX; id++, m = modules[id])
 
-// iterate through modules in a specific hook
 #define MODULE_FOREACH_HOOK(m, id, hook) \
   for (id = 0, m = modules[hooks[hook][id]]; id < hook_size[hook]; id++, m = modules[hooks[hook][id]])
 

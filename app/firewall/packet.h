@@ -17,9 +17,7 @@ typedef struct {
   uint16_t dp;
 } ip6_tuple_t;
 
-/**
- * Assure packet struct 8 bytes aligned
- * */
+// must align to 8 bytes
 #pragma pack(1)
 
 typedef struct {
@@ -27,9 +25,10 @@ typedef struct {
   uint16_t port_out;
   uint32_t ptype;
   uint32_t flags;
+  uint16_t queue_id;    // which queue the packet come from (also send to)
 
-  uint8_t smac[6];
-  uint8_t dmac[6];
+  uint8_t smac[6];      // source mac
+  uint8_t dmac[6];      // destination mac
 
   bool is_v4;
   union {
@@ -37,7 +36,7 @@ typedef struct {
     ip6_tuple_t v6;
   } tuple;
 
-  uint8_t reserved[191];
+  uint8_t reserved[189];
 } packet_t;
 
 #pragma pack()
